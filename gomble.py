@@ -138,27 +138,9 @@ class GtpEnsemble(RWI):
         elif cmd == "list_commands":
             ret = '\n'.join(self.commands)
         elif cmd == "genmove":
-            # genmove updates state, but different bots might not agree which would
-            # result in inconsistent state were alone genmove used
-            # so we need to either
-            # 1) use reg_genmove + play
-            # 2) or, do sequence of genmove, undo, play
-            
             try:
-                # this writes either the genmove or reg_genmove
                 player = args[0]
-                for b in self.bots:
-                    b.write_reg_genmove(player)
-                    
-                responses = self.read()
-                #logging.debug("genmove responses: %s"%repr(responses))
-                
-                # this does undo when previous step did genmove
-                for b in self.bots:
-                    b.reg_genmove_post()
-                    
-                ret = self.handle_move(responses)
-                self.interact('play %s %s'%(player, ret))
+                ret = handle_genmove(player)
             except GtpError as e:
                 err = e.message
         else:
@@ -174,8 +156,28 @@ class GtpEnsemble(RWI):
                                cmdid,
                                ret if err is None else err,)
     
+    def handle_genmove(self, player):
+        # genmove updates state, but different bots might not agree which would
+        # result in inconsistent state were alone genmove used
+        # so we need to either
+        # 1) use reg_genmove + play
+        # 2) or, do sequence of genmove, undo, play
+        
+        # this writes either the genmove or reg_genmove
+        for b in self.bots:
+            b.write_reg_genmove(player)
             
-    def handle_move(self, cmd, args, responses):
+        responses = self.read()
+        #logging.debug("genmove responses: %s"%repr(responses))
+        
+        # this does undo when previous step did genmove
+        for b in self.bots:
+            b.reg_genmove_post()
+            
+        self.interact('play %s %s'%(player, ret))
+        return self.choose_move(responses)
+            
+    def choose_move(self, cmd, args, responses):
         return responses[0]
         
     def handle_rest(self, cmd, args, responses):
@@ -210,7 +212,7 @@ class VotingEnsemble(GtpEnsemble):
         assert ties in ['random', 'first']
         self.ties = ties
         
-    def handle_move(self, responses):
+    def choose_move(self, responses):
         logging.debug("VotingEnsemble candidates: %s"%repr(responses))
         
         assert len(responses) == len(self.bots)
