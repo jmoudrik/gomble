@@ -114,7 +114,7 @@ class GtpEnsemble(RWI):
         if raw_line and raw_line[-1] !=  '\n':
             logging.warn("missing newline at the end")
         
-        logging.debug("GTP command: %s"%repr(raw_line))
+        logging.debug("got GTP cmd: %s"%repr(raw_line))
         line = re.sub(r'\s+', ' ', raw_line)
         line = re.sub(r'#.*', '', line)
         cmdline = line.strip().split()
@@ -140,11 +140,12 @@ class GtpEnsemble(RWI):
         elif cmd == "genmove":
             try:
                 player = args[0]
-                ret = handle_genmove(player)
+                ret = self.handle_genmove(player)
             except GtpError as e:
                 err = e.message
         else:
-            assert cmd in self.commands
+            if not cmd in self.commands:
+                err = "unknown command"
             
             try:
                 responses = self.interact(raw_line)
@@ -174,8 +175,10 @@ class GtpEnsemble(RWI):
         for b in self.bots:
             b.reg_genmove_post()
             
+        ret = self.choose_move(responses)
         self.interact('play %s %s'%(player, ret))
-        return self.choose_move(responses)
+        
+        return ret
             
     def choose_move(self, cmd, args, responses):
         return responses[0]
@@ -198,7 +201,9 @@ def raw_input_iterator():
 def gtp_io(group, iterator):
     for line in iterator:
         resp = group.gtp_one_line(line)
-        logging.debug("Response: %s"%repr(resp))
+        logging.debug("return: %s"%repr(resp))
+        if not resp:
+            continue
         sys.stdout.write(resp)
         sys.stdout.flush()
         
@@ -232,25 +237,83 @@ class VotingEnsemble(GtpEnsemble):
                 return move
             
         assert False
+        
+class MoveProbabilityEnsemble(GtpEnsemble):
+    def __init__(self, bots, weights=None, ties='random'):
+        super(MoveProbabilityEnsemble, self).__init__(bots)
+        if weights == None:
+            weights = np.ones(len(bots))
+        self.weights = weights
+        
+        for b in self.bots:
+            logging.debug(b.bot_cmd)
+            assert "move_probabilities" in b.commands
+            
+        assert ties in ['random', 'first']
+        self.ties = ties
+        
+    def handle_genmove(self, player):
+        # genmove updates state, but different bots might not agree which would
+        # result in inconsistent state were alone genmove used
+        # so we need to either
+        # 1) use reg_genmove + play
+        # 2) or, do sequence of genmove, undo, play
+        
+        # this writes either the genmove or reg_genmove
+        for b in self.bots:
+            b.write_reg_genmove(player)
+            
+        moves = self.read()
+        responses = self.interact("move_probabilities")
+        
+        # this does undo when previous step did genmove
+        for b in self.bots:
+            b.reg_genmove_post()
+        
+        ret = self.choose_move(responses)    
+        self.interact('play %s %s'%(player, ret))
+        return ret
+            
+    def choose_move(self, responses):
+        assert len(responses) == len(self.bots)
+        votes = {}
+        for bot_num, response in enumerate(responses):
+            for line in response.split('\n'):
+                move, prob = line.split()
+                votes[move] = votes.get(move, 0.0) + float(prob) * self.weights[bot_num]
+        
+        vs = sorted(votes.iteritems(), key=(lambda (k, v): v), reverse=True)
+        for move, vote in vs[:10]:
+            logging.debug("Ensemble votes: %s %.5f"%(move, vote))
+        
+        m = max(votes.itervalues())
+        if self.ties == 'random':
+            responses = copy.copy(responses)
+            random.shuffle(responses)
+            
+        for move, vote in votes.iteritems():
+            if vote == m:
+                return move
+            
+        assert False
 
 def main():
     logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
                         level=logging.DEBUG, filename='LOG')
     
     bots = ["gogui-client haf.ms.mff.cuni.cz 10666", 
-            "gnugo --mode gtp --level 10", 
-            "gnugo --mode gtp --level 8", 
-            "gnugo --mode gtp --level 2", 
-            "gnugo --mode gtp --level 1"]
-    weights = [1.1, 1.0, 0.8, 0.6, 0.4]
+            "gnugo --mode gtp --chinese-rules --capture-all-dead --level 10", 
+            ]
+    weights = [ 1.0,
+               1.0]
     for num, b in enumerate(bots):
         logging.debug("%d %.2f %s"%(num, weights[num], b))
     
-    g = VotingEnsemble(map(GtpBot, (cmd.split() for cmd in bots)),
-                       weights=weights)
+    #g = VotingEnsemble(map(GtpBot, (cmd.split() for cmd in bots)), weights=weights)
     
-    g.bots[0].commands = filter(lambda c: c!='reg_genmove',
-                                g.bots[0].commands )
+    g = MoveProbabilityEnsemble(map(GtpBot, (cmd.split() for cmd in bots)))
+    
+    #g.bots[0].commands = filter(lambda c: c!='reg_genmove', g.bots[0].commands )
     
     if True:
     #if False:
@@ -260,9 +323,9 @@ def main():
                    'boardsize 19\n',
                    'genmove B\n',
                    'genmove W\n',
+                   'quit\n'
                    ])
-    
-    g.interact('quit\n')
+        
     g.close()    
     
 if __name__ == "__main__":
