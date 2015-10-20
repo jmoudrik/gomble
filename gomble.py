@@ -6,6 +6,7 @@ import copy
 import logging
 import subprocess
 import numpy as np
+import os
 import re
 import random
 
@@ -48,14 +49,19 @@ def gtp_cut_response(response):
 
 
 class GtpBot(RWI):
-
-    def __init__(self, bot_cmd):
+    def __init__(self, bot_cmd, env_up={}):
+        if isinstance(bot_cmd, str):
+            bot_cmd = bot_cmd.split()
         self.bot_cmd = bot_cmd
+
+        env = os.environ.copy()
+        env.update(env_up)
 
         self.p = subprocess.Popen(self.bot_cmd,
                                   stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE,
-                                  stderr=None)
+                                  stderr=None,
+                                  env=env)
 
         success, response = self.interact('list_commands')
         assert success
@@ -136,8 +142,8 @@ class MoveProbBot(GtpBot):
         cleanup = undo
     """
 
-    def __init__(self, bot_cmd):
-        super(MoveProbBot, self).__init__(bot_cmd)
+    def __init__(self, *args, **kwargs):
+        super(MoveProbBot, self).__init__(*args, **kwargs)
 
     def move_prob_pre_write(self, player):
         pass
@@ -157,8 +163,8 @@ class MoveProbBot(GtpBot):
 
 class MoveProbBotDefault(MoveProbBot):
 
-    def __init__(self, bot_cmd):
-        super(MoveProbBotDefault, self).__init__(bot_cmd)
+    def __init__(self, *args, **kwargs):
+        super(MoveProbBotDefault, self).__init__(*args, **kwargs)
 
     def move_prob_pre_write(self, player):
         self.reg_genmove_write(player)
@@ -182,8 +188,8 @@ class MoveProbBotDefault(MoveProbBot):
 
 class Pachi(MoveProbBotDefault):
 
-    def __init__(self, bot_cmd):
-        super(Pachi, self).__init__(bot_cmd)
+    def __init__(self, *args, **kwargs):
+        super(Pachi, self).__init__(*args, **kwargs)
 
         assert self.name == "Pachi Distributed"
         # hidden feature ;-)
@@ -246,7 +252,8 @@ class GtpEnsemble(RWI):
         """
         GTP protocol I/O
 
-        Spec as in http://www.lysator.liu.se/~gunnar/gtp/gtp2-spec-draft2/gtp2-spec.html
+        Spec as in
+        http://www.lysator.liu.se/~gunnar/gtp/gtp2-spec-draft2/gtp2-spec.html
         """
         if raw_line and raw_line[-1] != '\n':
             logging.warn("%s: missing newline at the end" % (repr(self)))
@@ -510,21 +517,18 @@ def main():
     logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
                         level=logging.DEBUG, filename='LOG')
 
-    bots = [(MoveProbBotDefault, "gogui-client haf.ms.mff.cuni.cz 10666"),
-            (MoveProbBotDefault, "gnugo --mode gtp --chinese-rules "
-                                 "--capture-all-dead --level 10"),
-            (Pachi, './runpachi.sh')
+    bots = [# MoveProbBotDefault("gogui-client haf.ms.mff.cuni.cz 10666"),
+            # MoveProbBotDefault("gnugo --mode gtp --chinese-rules "
+            #                    "--capture-all-dead --level 10"),
+            Pachi('./runpachi.sh', env_up={'test':'10'})
             ]
     weights = [1.0, 0.3, 1.0]
     for num, b in enumerate(bots):
         logging.debug("%d %.2f %s" % (num, weights[num], b))
 
-    #g = VotingEnsemble(map(GtpBot, (cmd.split() for cmd in bots)), weights=weights, ties='random')
+    #g = VotingEnsemble(map(GtpBot, bots), weights=weights, ties='random')
 
-    g = MoveProbabilityEnsemble([botclass(cmd.split())
-                                 for botclass, cmd in bots], weights=weights)
-
-    #g.bots[0].commands = filter(lambda c: c!='reg_genmove', g.bots[0].commands )
+    g = MoveProbabilityEnsemble(bots, weights=weights)
 
     if True:
         # if False:
@@ -540,3 +544,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    pass
