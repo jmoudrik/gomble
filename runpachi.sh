@@ -1,24 +1,26 @@
 #!/bin/bash
 
-trap 'kill $PID_D' EXIT SIGINT SIGKILL
+#trap 'kill $PID_D 2>/dev/null' EXIT SIGINT SIGKILL
 
 run_slave () {
-	( ./pachi -e uct -g localhost:1234 -l localhost:1235 "${SLAVE}${ALL}" ) &
+	nice ./pachi -e uct -g localhost:1234 -l localhost:1235 "${SLAVE}${ALL}" &
 	NEWPID=$!
 }
 
 run_dist () {
-	./pachi -e distributed ${DIST}${ALL} 2>> ${LOGDIR}/LOG_pachi <&1 &
+	./pachi -e distributed ${DIST}${ALL} 2>> ${LOGDIR}/LOG_pachi <&0 &
 	NEWPID=$!
 }
 
 LOGDIR="$(pwd)"
 NUM_SLAVES=2
 
+exec 2>${LOGDIR}/LOG_runpachi
+
 cd ~/prj/pachi
 export ALL=""
 export SLAVE="threads=2,max_tree_size=3072,slave"
-export DIST="slave_port=1234,proxy_port=1235,pass_all_alive"
+export DIST="slave_port=1234,proxy_port=1235"  # pass_all_alive"
 
 run_dist 		#sets NEWPID
 echo "started master $NEWPID" >&2
