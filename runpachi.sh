@@ -1,6 +1,6 @@
 #!/bin/bash
 
-trap 'kill $PID_D 2>/dev/null' EXIT SIGINT SIGKILL
+trap 'kill $PID_D 2>/dev/null' EXIT SIGINT SIGTERM
 
 run_slave () {
 	( nice ./pachi -e uct -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} "${SLAVE_SETUP}" ) &
@@ -40,7 +40,7 @@ DIST_SETUP=$DIST_SETUP
 EOF
 
 run_dist 		#sets NEWPID
-echo "started master $NEWPID" >&2
+echo "$0: started master $NEWPID" >&2
 PID_D=$NEWPID
 sleep 1
 #kill -0 $PID_D 2>/dev/null || { echo "could not start master, exiting" ; exit 1 ; }
@@ -49,37 +49,37 @@ SLAVES=
 for num in `seq $NUM_SLAVES` ; do
 	run_slave		#sets NEWPID
 	SLAVES="$SLAVES $NEWPID"
-	echo "started slave $NEWPID" >&2
+	echo "$0: started slave $NEWPID" >&2
 done
 
 while true ; do
 	#echo "" >&2
 	## check distributed
 	kill -0 $PID_D 2>/dev/null && {
-		#echo "master $PID_D alive" >&2
+		#echo "$0: master $PID_D alive" >&2
 		# running
 		NEW_SLAVES=
 		for PID in $SLAVES ; do
 			kill -0 $PID 2>/dev/null && {
-				#echo "slave $PID alive" >&2
+				#echo "$0: slave $PID alive" >&2
 				NEWPID=$PID
 			} || {
 				run_slave		#sets NEWPID
-				echo "slave $PID died, restarted as $NEWPID" >&2
+				echo "$0: slave $PID died, restarted as $NEWPID" >&2
 			}
 			NEW_SLAVES="$NEW_SLAVES $NEWPID"
 		done
 		SLAVES=$NEW_SLAVES
 	} || {
-		echo "master $PID_D dead" >&2
+		echo "$0: master $PID_D dead" >&2
 		# dead
-		echo "killing all the slaves" >&2
+		echo "$0: killing all the slaves" >&2
 		for PID in $SLAVES ; do
 			kill -0 $PID 2>/dev/null && {
-				echo "killing $PID" >&2
+				echo "$0: killing $PID" >&2
 				kill $PID
 			} || {
-				echo "$PID already dead" >&2
+				echo "$0: $PID already dead" >&2
 			}
 		done
 		break
