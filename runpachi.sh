@@ -8,17 +8,17 @@ run_slave () {
 }
 
 run_dist () {
-	./pachi -e distributed ${DIST_PORTS}${DIST_SETUP} 2>> $LOGFILE <&0 &
+	./pachi -e distributed ${DIST_PORTS}${DIST_SETUP} <&0 &
 	NEWPID=$!
 }
 
-[ -z "$LOGFILE" ] && LOGFILE="$(pwd)/LOG_pachi"
+[ -n "$LOGFILE" ] && exec 2> "$LOGFILE"
 [ -z "$NUM_SLAVES" ] && NUM_SLAVES="2"
 [ -z "$PACHI_DIR" ] && PACHI_DIR=~/prj/pachi
-[ -z "$SLAVE_PORT" ] && SLAVE_PORT=1234
-[ -z "$LOG_PORT" ] && LOG_PORT=1235
-[ -z "$SLAVE_SETUP" ] && SLAVE_SETUP="threads=2,max_tree_size=3072,slave"
-[ -z "$DIST_SETUP" ] && DIST_SETUP=""  # pass_all_alive"
+[ -z "$SLAVE_PORT" ] && SLAVE_PORT=$((10000 + RANDOM % 20000))
+[ -z "$LOG_PORT" ] && LOG_PORT=$(($SLAVE_PORT + 1 ))
+[ -z "$SLAVE_SETUP" ] && SLAVE_SETUP="threads=1,max_tree_size=1000,slave"
+[ -z "$DIST_SETUP" ] && DIST_SETUP="pass_all_alive"
 
 # need to separate DIST_PORTS and DIST_SETUP when run_dist
 [ -n "$DIST_SETUP" ] && [ ! $( echo "$DIST_SETUP" | grep -e "^," ) ] && DIST_SETUP=",$DIST_SETUP"
@@ -26,7 +26,6 @@ run_dist () {
 DIST_PORTS="slave_port=${SLAVE_PORT},proxy_port=$LOG_PORT"
 
 cd $PACHI_DIR
-exec 2> $LOGFILE
 
 cat >&2 <<EOF 
 
