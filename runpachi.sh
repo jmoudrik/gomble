@@ -3,10 +3,15 @@
 trap 'kill $PID_D 2>/dev/null' EXIT SIGTERM
 
 run_slave () {
-	echo "$0: slave cmd:" >&2
-	echo "./pachi -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} ${SLAVE_SETUP}" >&2
-
-	( nice ./pachi -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} -e uct "${SLAVE_SETUP}" ) &
+	[ "$#" -eq 0 ] && {
+		echo "$0: slave cmd: (USING DEFAULT)" >&2
+		echo  "./pachi -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} -t =5000 -e uct threads=1,slave" >&2
+		( nice ./pachi -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} -t =5000 -e uct threads=1,slave ) &
+	} || {
+		echo "$0: slave cmd:" >&2
+		echo  "./pachi -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} $@" >&2
+		( nice ./pachi -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} "$@" ) &
+	}
 	NEWPID=$!
 }
 
@@ -22,7 +27,6 @@ run_dist () {
 [ -z "$PACHI_DIR" ] && PACHI_DIR=~/prj/pachi
 [ -z "$SLAVE_PORT" ] && SLAVE_PORT=$((10000 + RANDOM % 20000))
 [ -z "$LOG_PORT" ] && LOG_PORT=$(($SLAVE_PORT + 1 ))
-[ -z "$SLAVE_SETUP" ] && SLAVE_SETUP="threads=1,max_tree_size=1000,slave"
 [ -z "$DIST_SETUP" ] && DIST_SETUP="" #pass_all_alive"
 
 DIST_PORTS="slave_port=${SLAVE_PORT},proxy_port=$LOG_PORT"
@@ -35,7 +39,6 @@ $0: $(date)
 LOGFILE=$LOGFILE
 NUM_SLAVES=$NUM_SLAVES
 PACHI_DIR=$PACHI_DIR
-SLAVE_SETUP=$SLAVE_SETUP
 DIST_SETUP=$DIST_SETUP
 
 EOF
@@ -51,7 +54,7 @@ sleep 1
 
 SLAVES=
 for num in `seq $NUM_SLAVES` ; do
-	run_slave		#sets NEWPID
+	run_slave "$@"	#sets NEWPID
 	SLAVES="$SLAVES $NEWPID"
 	echo "$0: started slave $NEWPID" >&2
 done
