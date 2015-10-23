@@ -1,27 +1,29 @@
 #!/bin/bash
 
-trap 'kill $PID_D 2>/dev/null' EXIT SIGINT SIGTERM
+trap 'kill $PID_D 2>/dev/null' EXIT SIGTERM
 
 run_slave () {
-	( nice ./pachi -e uct -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} "${SLAVE_SETUP}" ) &
+	echo "$0: slave cmd:" >&2
+	echo "./pachi -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} ${SLAVE_SETUP}" >&2
+
+	( nice ./pachi -g localhost:${SLAVE_PORT} -l localhost:${LOG_PORT} -e uct "${SLAVE_SETUP}" ) &
 	NEWPID=$!
 }
 
 run_dist () {
+	echo "$0: distributed engine cmd:" >&2
+	echo "./pachi -e distributed ${DIST_PORTS}${DIST_SETUP}" >&2
 	./pachi -e distributed ${DIST_PORTS}${DIST_SETUP} <&0 &
 	NEWPID=$!
 }
 
 [ -n "$LOGFILE" ] && exec 2> "$LOGFILE"
-[ -z "$NUM_SLAVES" ] && NUM_SLAVES="2"
+[ -z "$NUM_SLAVES" ] && NUM_SLAVES="1"
 [ -z "$PACHI_DIR" ] && PACHI_DIR=~/prj/pachi
 [ -z "$SLAVE_PORT" ] && SLAVE_PORT=$((10000 + RANDOM % 20000))
 [ -z "$LOG_PORT" ] && LOG_PORT=$(($SLAVE_PORT + 1 ))
 [ -z "$SLAVE_SETUP" ] && SLAVE_SETUP="threads=1,max_tree_size=1000,slave"
-[ -z "$DIST_SETUP" ] && DIST_SETUP="pass_all_alive"
-
-# need to separate DIST_PORTS and DIST_SETUP when run_dist
-[ -n "$DIST_SETUP" ] && [ ! $( echo "$DIST_SETUP" | grep -e "^," ) ] && DIST_SETUP=",$DIST_SETUP"
+[ -z "$DIST_SETUP" ] && DIST_SETUP="" #pass_all_alive"
 
 DIST_PORTS="slave_port=${SLAVE_PORT},proxy_port=$LOG_PORT"
 
@@ -37,6 +39,9 @@ SLAVE_SETUP=$SLAVE_SETUP
 DIST_SETUP=$DIST_SETUP
 
 EOF
+
+# need to separate DIST_PORTS and DIST_SETUP when run_dist
+[ -n "$DIST_SETUP" ] && [ ! $( echo "$DIST_SETUP" | grep -e "^," ) ] && DIST_SETUP=",$DIST_SETUP"
 
 run_dist 		#sets NEWPID
 echo "$0: started master $NEWPID" >&2
