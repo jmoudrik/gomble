@@ -29,8 +29,8 @@ def binom_integrate(n, k, fr, to, SAMPLES=200):
 
 
 def wilson_score_interval(c):
-    z = 1.96 # 5%
-    #z = 0.67 # 50%
+    z = 1.96  # 5%
+    # z = 0.67 # 50%
     p = c.winrate
     n = float(c.samples)
     PM = z * math.sqrt(p*(1-p) / n + z*z / (4 * n*n))
@@ -49,12 +49,6 @@ def agresti_coul(c):
     return (p - PM, p + PM)
 
 
-def WIJM_score(c):
-    si = c.wilson_score_interval()
-    sc = int2width(si)
-    return max(0, c.winrate - 2 * sc)
-
-
 def format_raw(rc):
     props = ['B', 'W', 'wB', 'wW', 'lB', 'lW', 'tB', 'tW']
     return ', '.join("%s=%d" % (prop, getattr(rc, prop)) for prop in props)
@@ -69,14 +63,16 @@ def cont_from_raw(rc):
 
     move = gomill.common.format_vertex((18 - rc.y, rc.x))
     c = Cont(color, move, samples, wins, losses)
-    #print move, format_raw(rc)
+    # print move, format_raw(rc)
 
     if rc.B and rc.W:
-        logging.warn("A cont for both black and white: '%s'"%move)
+        logging.warn("A cont for both black and white: '%s'" % move)
 
     return c
 
+
 class Cont:
+
     def __init__(self, color, move, samples, wins, losses='count'):
         self.color = color
         self.move = move
@@ -88,19 +84,13 @@ class Cont:
         self.winrate = self.wins / float(self.samples)
 
     def __repr__(self):
-        return "Cont(%s %s, winrate=%.2f%%, samples=%d, wins=%d)"%(
+        return "Cont(%s %s, winrate=%.2f%%, samples=%d, wins=%d)" % (
                                                         self.color,
                                                         self.move,
                                                         100*self.winrate,
                                                         self.samples,
                                                         self.wins)
 
-
-def int2width((l, u)):
-    return u - l
-
-def str_int((l, u)):
-    return "(%.3f, %.3f)"%(l, u)
 
 def find_nondominated(cs, verbose=False):
     nxt = set(cs)
@@ -114,20 +104,18 @@ def find_nondominated(cs, verbose=False):
         for nb in copy.copy(nxt):
             d_samples = this.samples - nb.samples
             d_winrate = this.winrate - nb.winrate
-            print this.move, nb.move, d_samples, d_winrate
 
             if d_samples <= 0 and d_winrate <= 0:
                 # nb is better or equal, skip this
                 good = False
                 if verbose:
-                    print "%s is dominated by %s"%(this.move, nb.move)
+                    print "%s is dominated by %s" % (this.move, nb.move)
                 break
             if d_samples >= 0 and d_winrate >= 0:
                 # this is better or equal, skip nb
                 if verbose:
-                    print "%s dominates %s"%(this.move, nb.move)
+                    print "%s dominates %s" % (this.move, nb.move)
                 nxt.remove(nb)
-
         if good:
             ret.append(this)
 
@@ -139,7 +127,7 @@ def cont_from_pat():
         config = ConfigObj(infile=fin)
 
     ng = kombiloNG.KEngine()
-    #print config['databases']
+    # print config['databases']
     ng.gamelist.populateDBlist(config['databases'])
     ng.loadDBs()
 
@@ -172,9 +160,10 @@ def cont_from_pat():
 ...................
 ...................""", ptype=lk.FULLBOARD_PATTERN)
 
-    ng.patternSearch(p , so)
+    ng.patternSearch(p, so)
 
     return map(cont_from_raw, ng.continuations)
+
 
 def cont_test():
     # ( color, move, samples, wins )
@@ -195,22 +184,18 @@ def cont_test():
           ('black', 'nadprumerny', 26, 15),
          ]
 
-    return [ Cont(*t) for t in l ]
+    return [Cont(*t) for t in l]
+
 
 def main():
-    def int_exp(c):
-        return binom_exp(c.samples, c.wins, 0.001, 0.5, 200)
-    def wilson_width(c):
-        si = c.wilson_score_interval()
-        return int2width(si)
     def int_score_neg(c):
         return binom_integrate(c.samples, c.wins, 0.001, 0.5)
+
     def int_score_pos(c):
         return binom_integrate(c.samples, c.wins, 0.5, 0.999)
-    def int_score_whole(c):
-        return  int_score_neg(c) - int_score_pos(c)
+
     def int_score_log(c):
-        return  log(int_score_neg(c)) - log(int_score_pos(c))
+        return log(int_score_neg(c)) - log(int_score_pos(c))
 
     def add_prior(c):
         cc = copy.copy(c)
@@ -220,36 +205,26 @@ def main():
 
     def score(c):
         cc = add_prior(c)
-        #return int_score_neg(cc)
-        #return int_score_whole(cc)
         return int_score_log(cc)
 
-    #cs = cont_test()
+    # cs = cont_test()
     cs = cont_from_pat()
 
+    # if True:
     if False:
         print len(cs)
-        cs = find_nondominated(cs, True)
+        cs = find_nondominated(cs, False)
         print len(cs)
 
-    print
     s = sorted(cs, key=score)
-    #s = [ s[0], s[3]]
     for c in s:
-        #print
         print repr(c)
-        #sc = int2width(wilson_score_interval(c))
-        #print "Wilson interval: %s, width=%s"%(str_int(si), sc)
-        #print "< 0.5  ", int_score_neg(c)
-        #print "< 0.5 P", int_score_neg(add_prior(c))
-        #print "> 0.5  ", int_score_pos(c)
-        #print "> 0.5 P", int_score_pos(add_prior(c))
-        #print "tot   P", int_score_whole(add_prior(c))
+        # print "< 0.5  ", int_score_neg(c)
+        # print "< 0.5 P", int_score_neg(add_prior(c))
+        # print "> 0.5  ", int_score_pos(c)
+        # print "> 0.5 P", int_score_pos(add_prior(c))
         print "log   P", int_score_log(add_prior(c))
-        print "log    ", int_score_log(c)
-        #print "goodnes", int_score_pos(c)
-        #print "exp    ", int_exp(c)
-        #print "badness/exp", score(c) / int_exp(c)
+        # print "log    ", int_score_log(c)
 
 
 if __name__ == "__main__":
