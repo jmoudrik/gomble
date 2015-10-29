@@ -15,17 +15,55 @@ lgam = special.gammaln
 
 PRIOR_WINS = 5
 PRIOR_LOSSES = 5
+INTEGRATE_SAMPLES = 1000
+INTEGRATE_LINSPACE = np.linspace(0.0001, 0.9999, 2*INTEGRATE_SAMPLES)
+INTEGRATE_LINSPACE_LOW = INTEGRATE_LINSPACE <= 0.5
+INTEGRATE_LINSPACE_HIGH = np.logical_not(INTEGRATE_LINSPACE_LOW)
 
 
 def binomial(n, k, p):
     return exp(lgam(n+1) - lgam(n-k+1) - lgam(k+1) + k*log(p) + (n-k)*log(1.-p))
 
 
-def binom_integrate(n, k, fr, to, SAMPLES=200):
+def binom_integrate(n, k, fr, to):
     assert fr < to
-    lp = np.linspace(fr, to, SAMPLES)
+    lp = np.linspace(fr, to, INTEGRATE_SAMPLES)
     bp = binomial(n, k, lp)
-    return bp.sum() / SAMPLES
+    return bp.sum() / INTEGRATE_SAMPLES
+
+
+def log_score(n, k):
+    # faster (and a bit more precise)
+    # alternative
+    bp = binomial(n, k, INTEGRATE_LINSPACE)
+    lo = INTEGRATE_LINSPACE_LOW * bp
+    hi = INTEGRATE_LINSPACE_HIGH * bp
+
+    return (log(lo.sum() / INTEGRATE_SAMPLES)
+            - log(hi.sum() / INTEGRATE_SAMPLES))
+
+
+def int_score_neg(c):
+    return binom_integrate(c.samples, c.wins, 0.0001, 0.5)
+
+
+def int_score_pos(c):
+    return binom_integrate(c.samples, c.wins, 0.5, 0.9999)
+
+
+def int_score_log(c):
+    return log(int_score_neg(c)) - log(int_score_pos(c))
+
+
+def int_score_log_fast(c):
+    return log_score(c.samples, c.wins)
+
+
+def add_prior(c):
+    cc = copy.copy(c)
+    cc.wins += PRIOR_WINS
+    cc.samples += PRIOR_WINS + PRIOR_LOSSES
+    return cc
 
 
 def wilson_score_interval(c):
@@ -188,27 +226,13 @@ def cont_test():
 
 
 def main():
-    def int_score_neg(c):
-        return binom_integrate(c.samples, c.wins, 0.001, 0.5)
-
-    def int_score_pos(c):
-        return binom_integrate(c.samples, c.wins, 0.5, 0.999)
-
-    def int_score_log(c):
-        return log(int_score_neg(c)) - log(int_score_pos(c))
-
-    def add_prior(c):
-        cc = copy.copy(c)
-        cc.wins += PRIOR_WINS
-        cc.samples += PRIOR_WINS + PRIOR_LOSSES
-        return cc
-
     def score(c):
         cc = add_prior(c)
-        return int_score_log(cc)
+        # return int_score_log(cc)
+        return int_score_log_fast(cc)
 
-    # cs = cont_test()
-    cs = cont_from_pat()
+    cs = cont_test()
+    # cs = cont_from_pat()
 
     # if True:
     if False:
@@ -224,6 +248,7 @@ def main():
         # print "> 0.5  ", int_score_pos(c)
         # print "> 0.5 P", int_score_pos(add_prior(c))
         print "log   P", int_score_log(add_prior(c))
+        print "log F P", int_score_log_fast(add_prior(c))
         # print "log    ", int_score_log(c)
 
 
