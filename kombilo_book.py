@@ -55,13 +55,15 @@ def score_int_pos(c):
 def score_diff_log_int(c):
     return log_diff_binom_integrate(c.samples, c.wins)
 
-
 def add_prior(c):
     cc = copy.copy(c)
     cc.wins += PRIOR_WINS
     cc.samples += PRIOR_WINS + PRIOR_LOSSES
     return cc
 
+def log_score_with_prior(c):
+    cc = add_prior(c)
+    return score_diff_log_int(cc)
 
 def wilson_score_interval(c):
     z = 1.96  # 5%
@@ -180,10 +182,7 @@ class MoveFinder:
         self.ng.gamelist.populateDBlist(config['databases'])
         self.ng.loadDBs()
 
-    def move_by_the_book(self, board, color, verbose=False):
-        """From position given by ``pattern``, returns the best continuation
-    in the database for a player ``color``. If no good cont found return None."""
-
+    def find_continuations(self, board, color):
         color = 'black' if color.lower().startswith('b') else 'white'
 
         # setup the search
@@ -193,29 +192,54 @@ class MoveFinder:
         so.moveLimit = 50
         so.searchInVariations = False
         pattern = format_board(board)
+        #logging.debug( pattern)
         p = kombiloNG.Pattern(pattern, ptype=lk.FULLBOARD_PATTERN)
         self.ng.patternSearch(p, so)
 
         # process the continuations
-        cs = map(cont_from_raw, self.ng.continuations)
+        return map(cont_from_raw, self.ng.continuations)
+
+    def continuation_score(self, c):
+        """badness of a continuation, the less, the better"""
+        return log_score_with_prior(c)
+
+    def probs_by_the_book(self, board, color, verbose=False):
+        """From position given by ``pattern``, returns probabilities of
+        next moves, proportional to their score, from the database for a player ``color``.
+        If no good cont found returns None."""
+        cs = self.find_continuations(board, color)
+        #logging.debug( repr(cs))
 
         if not cs:
             return None
 
-        def score(c):
-            cc = add_prior(c)
-            return score_diff_log_int(cc)
+        cs.sort(key=self.continuation_score)
+        # reverse signs for best moves to have biggest prob
+        scs = np.array([self.continuation_score(c) for c in cs])
+        scs = scs - scs.min() + 1
+        scso = 1 / scs
+        scsf = scso / scso.sum()
 
-        cs = find_nondominated(cs, False)
-        cs.sort(key=score)
+        return [ (c.move, prob) for c, prob in zip(cs, scsf) ]
+
+    def move_by_the_book(self, board, color, verbose=False):
+        """From position given by ``pattern``, returns the best continuation
+    in the database for a player ``color``. If no good cont found return None."""
+        cs = self.find_continuations(board, color)
+
+        if not cs:
+            return None
+
+        #cs = find_nondominated(cs, False)
+        cs.sort(key=self.continuation_score)
         best_move = cs[0]
 
         if verbose:
             for c in cs:
                 print repr(c)
-                print "< 0.5 P", score_int_neg(add_prior(c))
-                print "> 0.5 P", score_int_pos(add_prior(c))
-                print "diff  P", score_diff_log_int(add_prior(c))
+                #print "< 0.5 P", score_int_neg(add_prior(c))
+                #print "> 0.5 P", score_int_pos(add_prior(c))
+                print "score", self.continuation_score(c)
 
         if best_move.winrate < 0.5:
             return None
@@ -343,6 +367,7 @@ def test_search():
 
     print format_board(board)
     print mf.move_by_the_book(board, 'w', True)
+    print mf.probs_by_the_book(board, 'w')
 
 if __name__ == "__main__":
     #main()
