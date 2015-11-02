@@ -10,6 +10,8 @@ from kombilo import kombiloNG, libkombilo as lk
 from configobj import ConfigObj
 
 import gomill.common
+import gomill.sgf
+import gomill.sgf_moves
 
 lgam = special.gammaln
 
@@ -155,6 +157,72 @@ def find_nondominated(cs, verbose=False):
     return ret
 
 
+def format_board(board):
+    A = [['.'] * board.side for _ in xrange(board.side)]
+
+    for (color, (row, col)) in board.list_occupied_points():
+        # gomill has origin in lower left corner
+        row = board.side - row - 1
+        A[row][col] = 'X' if color.lower().startswith('b') else 'O'
+
+    return '\n'.join(''.join(l) for l in A)
+
+
+class MoveFinder:
+
+    def __init__(self, config_file='/home/jm/.kombilo/08/kombilo.cfg'):
+        self.config_file = config_file
+        with open(config_file, 'r') as fin:
+            config = ConfigObj(infile=fin)
+
+        self.ng = kombiloNG.KEngine()
+        # print config['databases']
+        self.ng.gamelist.populateDBlist(config['databases'])
+        self.ng.loadDBs()
+
+    def move_by_the_book(self, board, color, verbose=False):
+        """From position given by ``pattern``, returns the best continuation
+    in the database for a player ``color``. If no good cont found return None."""
+
+        color = 'black' if color.lower().startswith('b') else 'white'
+
+        # setup the search
+        so = lk.SearchOptions()
+        so.fixedColor = 1
+        so.nextMove = 1 if color == 'black' else 2
+        so.moveLimit = 50
+        so.searchInVariations = False
+        pattern = format_board(board)
+        p = kombiloNG.Pattern(pattern, ptype=lk.FULLBOARD_PATTERN)
+        self.ng.patternSearch(p, so)
+
+        # process the continuations
+        cs = map(cont_from_raw, self.ng.continuations)
+
+        if not cs:
+            return None
+
+        def score(c):
+            cc = add_prior(c)
+            return score_diff_log_int(cc)
+
+        cs = find_nondominated(cs, False)
+        cs.sort(key=score)
+        best_move = cs[0]
+
+        if verbose:
+            for c in cs:
+                print repr(c)
+                print "< 0.5 P", score_int_neg(add_prior(c))
+                print "> 0.5 P", score_int_pos(add_prior(c))
+                print "diff  P", score_diff_log_int(add_prior(c))
+
+        if best_move.winrate < 0.5:
+            return None
+
+        return best_move.move
+
+
 def cont_from_pat():
     with open('/home/jm/.kombilo/08/kombilo.cfg', 'r') as fin:
         config = ConfigObj(infile=fin)
@@ -255,8 +323,29 @@ def main():
         print "diff  P", score_diff_log_int(add_prior(c))
 
 
-if __name__ == "__main__":
-    main()
+def get_board(move=5):
+    with open("test.sgf", 'r') as fin:
+        game = gomill.sgf.Sgf_game.from_string(fin.read())
 
+    board, movepairs = gomill.sgf_moves.get_setup_and_moves(game)
+    for color, move in movepairs[:move]:
+        if move:
+            row, col = move
+            board.play(row, col, color)
+
+    return board
+
+def test_search():
+    mf = MoveFinder()
+    print "init done"
+
+    board = get_board(1)
+
+    print format_board(board)
+    print mf.move_by_the_book(board, 'w', True)
+
+if __name__ == "__main__":
+    #main()
     # test_speed()
+    test_search()
     pass
