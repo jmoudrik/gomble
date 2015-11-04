@@ -5,6 +5,8 @@ import copy
 from scipy import special, exp, log
 import numpy as np
 import logging
+import collections
+
 
 from kombilo import kombiloNG, libkombilo as lk
 from configobj import ConfigObj
@@ -21,6 +23,9 @@ INTEGRATE_SAMPLES = 1000
 INTEGRATE_LINSPACE = np.linspace(0.0001, 0.9999, 2*INTEGRATE_SAMPLES)
 INTEGRATE_LINSPACE_LOW = INTEGRATE_LINSPACE <= 0.5
 INTEGRATE_LINSPACE_HIGH = np.logical_not(INTEGRATE_LINSPACE_LOW)
+
+MoveFinderRet = collections.namedtuple('MoveFinderRet', 'move probs scores weight')
+MoveValue = collections.namedtuple('MoveValue', 'move value')
 
 
 def binomial(n, k, p):
@@ -64,6 +69,15 @@ def add_prior(c):
 def log_score_with_prior(c):
     cc = add_prior(c)
     return score_diff_log_int(cc)
+
+def log_scores2probs(scores):
+    scores = scores - scores.min() + 1
+    scores_over = 1 / scores
+    return scores_over / scores_over.sum()
+
+def freq_scores2probs(scores):
+    scores = np.abs(scores)
+    return scores / scores.sum()
 
 def wilson_score_interval(c):
     z = 1.96  # 5%
@@ -172,61 +186,109 @@ def format_board(board):
 
 class MoveFinder:
 
-    def __init__(self, config_file='/home/jm/.kombilo/08/kombilo.cfg'):
+    def __init__(self, score_type='freq', config_file='/home/jm/.kombilo/08/kombilo.cfg'):
         self.config_file = config_file
         with open(config_file, 'r') as fin:
             config = ConfigObj(infile=fin)
+
+        assert score_type in ['freq', 'log']
+        self.score_type = score_type
 
         self.ng = kombiloNG.KEngine()
         # print config['databases']
         self.ng.gamelist.populateDBlist(config['databases'])
         self.ng.loadDBs()
 
+        # default search options
+        self.so = lk.SearchOptions()
+        self.so.fixedColor = 1
+        self.so.moveLimit = 10000
+        self.so.searchInVariations = False
+
     def find_continuations(self, board, color):
+        #assert board.side == 19
         color = 'black' if color.lower().startswith('b') else 'white'
+        logging.debug(color)
+        self.so.nextMove = 1 if color == 'black' else 2
 
-        # setup the search
-        so = lk.SearchOptions()
-        so.fixedColor = 1
-        so.nextMove = 1 if color == 'black' else 2
-        so.moveLimit = 50
-        so.searchInVariations = False
         pattern = format_board(board)
-        #logging.debug( pattern)
-        p = kombiloNG.Pattern(pattern, ptype=lk.FULLBOARD_PATTERN)
-        self.ng.patternSearch(p, so)
+        logging.debug('pattern:\n' + pattern)
+        self.ng.patternSearch(kombiloNG.Pattern(pattern, ptype=lk.FULLBOARD_PATTERN),
+                              self.so,
+                              update_gamelist=False)
 
-        # process the continuations
         return map(cont_from_raw, self.ng.continuations)
 
     def continuation_score(self, c):
         """badness of a continuation, the less, the better"""
-        return log_score_with_prior(c)
+        if self.score_type == 'freq':
+            return - c.samples
+        if self.score_type == 'log':
+            return log_score_with_prior(c)
+        assert False
 
-    def probs_by_the_book(self, board, color, verbose=False):
-        """From position given by ``pattern``, returns probabilities of
-        next moves, proportional to their score, from the database for a player ``color``.
-        If no good cont found returns None."""
-        cs = self.find_continuations(board, color)
-        #logging.debug( repr(cs))
+    def scores2probs(self, scores):
+        if self.score_type == 'freq':
+            return freq_scores2probs(scores)
+        if self.score_type == 'log':
+            return log_scores2probs(scores)
+        assert False
 
+    def conts2weight(self, cs):
+        THRESHOLD=0.48
         if not cs:
             return None
+        bwr = cs[0].winrate
+        return min(bwr / THRESHOLD, 1.0)
 
-        cs.sort(key=self.continuation_score)
-        # reverse signs for best moves to have biggest prob
-        scs = np.array([self.continuation_score(c) for c in cs])
-        scs = scs - scs.min() + 1
-        scso = 1 / scs
-        scsf = scso / scso.sum()
+    def by_the_book(self, board, color, verbose=False):
+        """From position given by ``pattern``, returns tuple:
+        * the best continuation
+        * probabilities of next moves, proportional to their score
+        from the database for a player ``color``.
 
-        return [ (c.move, prob) for c, prob in zip(cs, scsf) ]
+        If the best move is not good enough, returns (None, [probs])
+        """
+        # XXX
+        # FIXME kombiloNG breaks on empty board for some reason
+        #   it returns nothing and breaks consequent searches as well
+        #   (to return nothing as well)
+        #
+        if (board.side == 19
+            and board.is_empty()
+            and color.lower().startswith('b')):
+            return MoveFinderRet('Q17',
+                                 [ MoveValue('Q17', 0.55), MoveValue('Q16', 0.45) ],
+                                 [ MoveValue('Q17', 0.55), MoveValue('Q16', 0.45) ],
+                                 1.0)
 
-    def move_by_the_book(self, board, color, verbose=False):
-        """From position given by ``pattern``, returns the best continuation
-    in the database for a player ``color``. If no good cont found return None."""
         cs = self.find_continuations(board, color)
+        move = self.conts2move(cs, verbose)
+        cs, probs, scores = self.conts2all(cs)
 
+        logging.debug("Continuations: " + str(cs))
+        logging.debug("Probs: " + str(probs))
+        logging.debug("Scores: " + str(scores))
+
+        ret_probs = None
+        if probs is not None:
+            ret_probs = [MoveValue(cont.move, prob)
+                                for cont, prob in zip(cs, probs)]
+        ret_scores = None
+        if scores is not None:
+            ret_scores = [MoveValue(cont.move, score)
+                                for cont, score in zip(cs, scores)]
+        return MoveFinderRet(move, ret_probs, ret_scores, self.conts2weight(cs))
+
+    def conts2all(self, cs):
+        if not cs:
+            return None, None, None
+        scores = np.array([self.continuation_score(c) for c in cs])
+        scores, cs = zip(*sorted(zip(scores, cs)))
+        scores = np.array(scores, dtype='float')
+        return cs, self.scores2probs(scores), scores
+
+    def conts2move(self, cs, verbose=False):
         if not cs:
             return None
 
@@ -241,7 +303,7 @@ class MoveFinder:
                 #print "> 0.5 P", score_int_pos(add_prior(c))
                 print "score", self.continuation_score(c)
 
-        if best_move.winrate < 0.5:
+        if best_move.winrate < 0.48:
             return None
 
         return best_move.move
@@ -267,8 +329,8 @@ def cont_from_pat():
     p = kombiloNG.Pattern("""
 ...................
 ...................
-...O...............
 ...............X...
+...................
 ...................
 ...................
 ...................
@@ -280,7 +342,7 @@ def cont_from_pat():
 ...................
 ...................
 ...................
-..O.X....,.....X...
+.........,.........
 ...................
 ...................
 ...................""", ptype=lk.FULLBOARD_PATTERN)
@@ -330,8 +392,8 @@ def main():
         # return score_int_pos(c)
         return score_diff_log_int(cc)
 
-    cs = cont_test()
-    # cs = cont_from_pat()
+    #cs = cont_test()
+    cs = cont_from_pat()
 
     # if True:
     if False:
@@ -348,7 +410,7 @@ def main():
 
 
 def get_board(move=5):
-    with open("test.sgf", 'r') as fin:
+    with open("test2.sgf", 'r') as fin:
         game = gomill.sgf.Sgf_game.from_string(fin.read())
 
     board, movepairs = gomill.sgf_moves.get_setup_and_moves(game)
@@ -360,17 +422,21 @@ def get_board(move=5):
     return board
 
 def test_search():
+    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
+                        level=logging.DEBUG)
     mf = MoveFinder()
     print "init done"
 
-    board = get_board(1)
+    #print format_board(board)
+    #print mf.move_by_the_book(board, 'w', True)
+    board = get_board(0)
+    mf.probs_by_the_book(board, 'B')
 
-    print format_board(board)
-    print mf.move_by_the_book(board, 'w', True)
-    print mf.probs_by_the_book(board, 'w')
+    board = get_board(1)
+    mf.probs_by_the_book(board, 'W')
 
 if __name__ == "__main__":
-    #main()
-    # test_speed()
+    # main()
+    #test_speed()
     test_search()
     pass

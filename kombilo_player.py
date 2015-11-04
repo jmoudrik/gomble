@@ -7,7 +7,8 @@ import gomill.common
 from gomill import gtp_engine, gtp_states
 
 from gomble import MoveProbBot
-from kombilo_book import MoveFinder
+import kombilo_book
+from kombilo_book import MoveFinder, MoveFinderRet, MoveValue
 
 
 def make_engine(player):
@@ -20,48 +21,49 @@ def make_engine(player):
     engine.add_commands(player.get_handlers())
     return engine
 
-
 class KombiloFusekiPlayer(object):
 
     def __init__(self):
         self.handlers = {'name': self.handle_name,
                          'move_probabilities': self.handle_move_probabilities,
+                         'kombilofuseki-weight': self.handle_weight,
                          }
-
-        self.name = None
-
-        self.mf = MoveFinder()
-        self.probs = None
+        self.name = "Kombilo Fuseki Bot, v0.1"
+        self.mf = MoveFinder('freq')
+        self.mps = MoveFinderRet(None, None, None, None)
 
     def genmove(self, state, player):
         """
         :returns: gomill.Move_generator_result
         """
+        logging.debug("KombiloFusekiPlayer.genmove()")
         result = gtp_states.Move_generator_result()
 
-        self.probs = self.mf.probs_by_the_book(state.board, player)
-        if ( not self.probs
-            and state.board.is_empty()
-            and player.lower().startswith('b')):
-            self.probs = [ ('Q17', 0.55), ('Q16', 0.45) ]
-
-        if self.probs:
-            result.move = gomill.common.move_from_vertex(self.probs[0][0],
+        self.mps = self.mf.by_the_book(state.board, player)
+        if self.mps.move:
+            result.move = gomill.common.move_from_vertex(self.mps.move,
                                                          state.board.side)
         else:
             result.pass_move = True
 
         return result
 
-    def handle_name(self, args):
+    def handle_name(self, args=[]):
         if self.name is None:
             return self.__class__
         return self.name
 
     def handle_move_probabilities(self, args):
-        if not self.probs:
+        logging.debug("KombiloFusekiPlayer.handle_move_probabilities()")
+        if not self.mps.probs:
             return ''
-        return '\n'.join( "%s %.6f"%(move, prob) for move, prob in self.probs )
+        return '\n'.join( "%s %.6f"%(move, prob) for move, prob in self.mps.probs )
+
+    def handle_weight(self, args):
+        logging.debug("KombiloFusekiPlayer.handle_weight()")
+        if self.mps.weight is None:
+            return ''
+        return '%.3f'%(self.mps.weight)
 
     def get_handlers(self):
         return self.handlers
@@ -69,6 +71,7 @@ class KombiloFusekiPlayer(object):
 
 if __name__ == "__main__":
     logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
+                        #level=logging.INFO)
                         level=logging.DEBUG)
     # player def
     player = KombiloFusekiPlayer()
