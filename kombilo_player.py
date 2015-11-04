@@ -70,7 +70,7 @@ class KombiloFusekiPlayer(object):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
+    logging.basicConfig(format='KP %(asctime)s %(levelname)s: %(message)s',
                         #level=logging.INFO)
                         level=logging.DEBUG)
     # player def
