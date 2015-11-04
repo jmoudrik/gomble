@@ -13,8 +13,8 @@ from kombilo_book import MoveFinder, MoveFinderRet, MoveValue
 
 def make_engine(player):
     """Return a Gtp_engine_protocol which runs the specified player."""
-    gtp_state = gtp_states.Gtp_state(move_generator=player.genmove)
-
+    gtp_state = gtp_states.Gtp_state(move_generator=player.genmove,
+                                     acceptable_sizes=(19,))
     engine = gtp_engine.Gtp_engine_protocol()
     engine.add_protocol_commands()
     engine.add_commands(gtp_state.get_handlers())
@@ -38,6 +38,11 @@ class KombiloFusekiPlayer(object):
         """
         logging.debug("KombiloFusekiPlayer.genmove()")
         result = gtp_states.Move_generator_result()
+
+        if state.board.side != 19:
+            logging.warn("Unsupported board size '%d'"%state.board.side )
+            result.pass_move = True
+            return result
 
         self.mps = self.mf.by_the_book(state.board, player)
         if self.mps.move:

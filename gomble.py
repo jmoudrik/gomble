@@ -75,7 +75,7 @@ class GtpBot(RWI):
         self.name = response
 
     def __repr__(self):
-        return "<%s, '%s'>" % (self.__class__.__name__, self.bot_cmd[0])
+        return "<%s>" % (self.__class__.__name__)
 
     def reg_genmove_write(self, player):
         if 'reg_genmove' in self.commands:
@@ -246,7 +246,14 @@ class GtpEnsemble(RWI):
         self.commands = set.intersection(*[set(b.commands) for b in self.bots])
 
         self.movenum = 0
-        self.boardsize = None
+        self.boardsize = 19
+
+        # different bots might have different default boardsize setting
+        responses = self.interact('boardsize %d'%self.boardsize)
+        good, bad = first_good_first_bad(responses)
+        if bad:
+            self.close()
+            assert False
 
     def __repr__(self):
         return "<%s>" % (self.__class__.__name__)
@@ -542,16 +549,16 @@ class MoveProbabilityEnsemble(WeightedEnsemble):
 
 def main():
     logging.basicConfig(format='__ %(asctime)s %(levelname)s: %(message)s',
-                        level=logging.DEBUG) #, filename='LOG')
+                        level=logging.DEBUG, filename='LOG')
 
     bots = [# MoveProbBotDefault("gogui-client haf.ms.mff.cuni.cz 10666"),
             # MoveProbBotDefault("gnugo --mode gtp --chinese-rules "
             #                    "--capture-all-dead --level 10"),
             KombiloFuseki("./kombilo_player.py"),
-            #Pachi('./runpachi.sh -t =5000 slave'),
+            Pachi('./runpachi.sh -t =10000 slave'),
             #Pachi('./runpachi.sh -t =5000 slave'),
             ]
-    weights = ['get_from_bot', 1.0, 1.0, 1.0]
+    weights = ['get_from_bot', 0.5, 1.0, 1.0]
     #for num, b in enumerate(bots):
         #logging.debug("bot #%d\nweight: %s\nbot: %s" % (num, weights[num], b))
 
