@@ -1,3 +1,7 @@
+goproxy-0.1/
+test_match.games
+LOG*
+.ropeproject/
 *.pyc
 *.wpr
 *.wpu
