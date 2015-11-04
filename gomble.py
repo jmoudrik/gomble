@@ -38,21 +38,25 @@ class GtpError(Exception):
 
 
 def gtp_cut_response(response):
+    """Cuts GTP response, returns pair
+    (success, response) or None"""
     assert response
     assert response[0] in '=?'
     tail = re.search(r'^([=?])[0-9]*(.*)$', response, flags=re.DOTALL)
-    if tail:
-        g = tail.groups()
-        return g[0] == '=', g[1].strip()
+    if not tail:
+        raise GtpError("invalid format")
 
-    return None
+    g = tail.groups()
+    return g[0] == '=', g[1].strip()
 
 
 class GtpBot(RWI):
-    def __init__(self, bot_cmd, env_up={}):
+
+    def __init__(self, bot_cmd, is_pass_resign_oracle=False, env_up={}):
         if isinstance(bot_cmd, str):
             bot_cmd = bot_cmd.split()
         self.bot_cmd = bot_cmd
+        self.is_pass_resign_oracle = is_pass_resign_oracle
 
         env = os.environ.copy()
         env.update(env_up)
@@ -179,7 +183,7 @@ class MoveProbBotDefault(MoveProbBot):
         success, resp = self.read()
         if not success:
             return None
-        toks = [line.split() for line in resp.split('\n')]
+        toks = [line.split() for line in resp.split('\n') if line]
         return [(move, float(prob)) for move, prob in toks]
 
     def move_prob_cleanup(self):
@@ -223,9 +227,9 @@ class KombiloFuseki(MoveProbBotDefault):
     def move_prob_cleanup(self):
         success, response = self.interact("kombilofuseki-weight")
         assert success
-        self.weight = float(response)
-        logging.debug('weight: %f'%self.weight)
+        self.weight = float(response) if response else 0.0
         self.reg_genmove_post()
+
 
 def first_good_first_bad(responses):
     """responses = [ (True, 'B4'), (False, 'failed to generate move')]"""
@@ -249,7 +253,7 @@ class GtpEnsemble(RWI):
         self.boardsize = 19
 
         # different bots might have different default boardsize setting
-        responses = self.interact('boardsize %d'%self.boardsize)
+        responses = self.interact('boardsize %d' % self.boardsize)
         good, bad = first_good_first_bad(responses)
         if bad:
             self.close()
@@ -309,7 +313,9 @@ class GtpEnsemble(RWI):
             responses = self.interact(raw_line)
             good, bad = first_good_first_bad(responses)
             if bad:
-                logging.error("%s: Err while quitting: %s" %(repr(self), repr(bad)))
+                logging.error(
+                    "%s: Err while quitting: %s" %
+                    (repr(self), repr(bad)))
             self.close()
             return True, '=\n\n'
         elif cmd == "genmove":
@@ -438,7 +444,7 @@ class VotingEnsemble(WeightedEnsemble):
         votes = {}
         for bot_num, move in enumerate(responses):
             votes[move] = votes.get(move, 0.0) + self.weight_for_bot(bot_num)
-        logging.debug("%s: votes: %s" %(repr(self), repr(votes)))
+        logging.debug("%s: votes: %s" % (repr(self), repr(votes)))
 
         m = max(votes.itervalues())
 
@@ -453,6 +459,10 @@ class VotingEnsemble(WeightedEnsemble):
         assert False
 
 
+def is_pass_resign(move):
+    return move.lower() in ('pass', 'resign')
+
+
 class MoveProbabilityEnsemble(WeightedEnsemble):
 
     def __init__(self, bots, weights=None, ties='random'):
@@ -463,6 +473,15 @@ class MoveProbabilityEnsemble(WeightedEnsemble):
         assert ties in ['random', 'first']
         self.ties = ties
 
+    def handle_pass_resign(self, responses):
+        assert len(responses) == len(self.bots)
+        for index, (success, move) in enumerate(responses):
+            if (success
+                    and is_pass_resign(move)
+                    and self.bots[index].is_pass_resign_oracle):
+                return move
+        return None
+
     def get_prob_responses(self, player):
         # genmove updates state, but different bots might not agree which would
         # result in inconsistent state were alone genmove used
@@ -472,30 +491,40 @@ class MoveProbabilityEnsemble(WeightedEnsemble):
 
         # this writes either the genmove or reg_genmove
 
-        # phase 1, pre
+        # ============ phase 1, pre =============
         for b in self.bots:
             b.move_prob_pre_write(player)
 
-        moves = [b.move_prob_pre_read() for b in self.bots]
-        moves = [m for m in moves if m]
+        ph1_resp = [b.move_prob_pre_read() for b in self.bots]
+        succs = [success for success, m in ph1_resp]
 
-        moves_lower = [m.lower() for s, m in moves]
-        if 'pass' in moves_lower:
-            return 'pass'
-        if 'resign' in moves_lower:
-            return 'resign'
+        pass_resign = self.handle_pass_resign(ph1_resp)
 
-        # phase 2, move probs
-        for b in self.bots:
-            b.move_prob_write(player)
-        responses = [b.move_prob_read() for b in self.bots]
+        # ========== phase 2, move probs =========
+        for num, b in enumerate(self.bots):
+            # only write move prob if previous command succeeded
+            if succs[num]:
+                b.move_prob_write(player)
 
-        # phase 3, cleanup
-        # this does undo when previous step did genmove
-        for b in self.bots:
-            b.move_prob_cleanup()
+        move_probs = []
+        for num, b in enumerate(self.bots):
+            if succs[num]:
+                move_probs.append(b.move_prob_read())
+            else:
+                move_probs.append(None)
 
-        return responses
+        # ========== phase 3, move probs =========
+        # this does undo when step 1 did genmove
+        for num, b in enumerate(self.bots):
+            # XXX should we only cleanup when the step 1 succeeded?
+            # chances are, we are screwed when failure appears anyway
+            if succs[num]:
+                b.move_prob_cleanup()
+
+        if pass_resign is not None:
+            return pass_resign
+
+        return move_probs
 
     def handle_genmove(self, player):
         # get the probabilities from the bots
@@ -516,18 +545,21 @@ class MoveProbabilityEnsemble(WeightedEnsemble):
         for bot_num, resp in enumerate(responses):
             bv.append({})
             if resp is None:
-                logging.error(
-                    "%s: bot %d: failed probabilities" %
-                    (repr(self), bot_num))
+                logging.error("%s: bot %d: failed" % (repr(self), bot_num))
                 continue
             weight = self.weight_for_bot(bot_num)
             for move, prob in resp:
+                # skip possible passes or resigns as these should be handled
+                # earlier (that is, if we were to pass/resign, we would not get
+                # here --- so we should skip these moves)
+                if is_pass_resign(move):
+                    continue
                 vote = prob * weight
                 bv[-1][move] = vote
                 votes[move] = votes.get(move, 0.0) + vote
 
         vs = sorted(votes.iteritems(), key=(lambda k_v: k_v[1]), reverse=True)
-        msg = ["%s:"%repr(self), "move\tsum\t[votes]"]
+        msg = ["%s:" % repr(self), "move\tsum\t[votes]"]
         for move, vote in vs[:10]:
             line = ["%s\t%.4f:\t" % (move, vote)]
             for d in bv:
@@ -544,23 +576,24 @@ class MoveProbabilityEnsemble(WeightedEnsemble):
             if vote == m:
                 return move
 
-        assert False
+        # if we got no normal move, we pass
+        return 'pass'
 
 
 def main():
     logging.basicConfig(format='__ %(asctime)s %(levelname)s: %(message)s',
                         level=logging.DEBUG, filename='LOG')
 
-    bots = [# MoveProbBotDefault("gogui-client haf.ms.mff.cuni.cz 10666"),
+    bots = [  # MoveProbBotDefault("gogui-client haf.ms.mff.cuni.cz 10666"),
             # MoveProbBotDefault("gnugo --mode gtp --chinese-rules "
             #                    "--capture-all-dead --level 10"),
-            KombiloFuseki("./kombilo_player.py"),
-            Pachi('./runpachi.sh -t =10000 slave'),
+            KombiloFuseki("./kombilo_player.py", is_pass_resign_oracle=True),
+            Pachi('./runpachi.sh -t =5000 slave'),
             #Pachi('./runpachi.sh -t =5000 slave'),
             ]
     weights = ['get_from_bot', 0.5, 1.0, 1.0]
-    #for num, b in enumerate(bots):
-        #logging.debug("bot #%d\nweight: %s\nbot: %s" % (num, weights[num], b))
+    # for num, b in enumerate(bots):
+    # logging.debug("bot #%d\nweight: %s\nbot: %s" % (num, weights[num], b))
 
     #g = VotingEnsemble(map(GtpBot, bots), weights=weights, ties='random')
 
