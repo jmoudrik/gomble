@@ -210,6 +210,23 @@ class Pachi(MoveProbBotDefault):
                 for move, playouts, winrate in toks]
 
 
+class KombiloFuseki(MoveProbBotDefault):
+
+    def __init__(self, *args, **kwargs):
+        super(KombiloFuseki, self).__init__(*args, **kwargs)
+
+        assert self.name.startswith("Kombilo Fuseki Bot")
+        # hidden feature ;-)
+        self.commands.append("kombilofuseki-weight")
+        self.weight = 1.0
+
+    def move_prob_cleanup(self):
+        success, response = self.interact("kombilofuseki-weight")
+        assert success
+        self.weight = float(response)
+        logging.debug('weight: %f'%self.weight)
+        self.reg_genmove_post()
+
 def first_good_first_bad(responses):
     """responses = [ (True, 'B4'), (False, 'failed to generate move')]"""
     good, bad = None, None
@@ -515,14 +532,16 @@ class MoveProbabilityEnsemble(GtpEnsemble):
 
 def main():
     logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
-                        level=logging.DEBUG, filename='LOG')
+                        level=logging.DEBUG) #, filename='LOG')
 
     bots = [# MoveProbBotDefault("gogui-client haf.ms.mff.cuni.cz 10666"),
             # MoveProbBotDefault("gnugo --mode gtp --chinese-rules "
             #                    "--capture-all-dead --level 10"),
-            Pachi('./runpachi.sh', env_up={'test':'10'})
+            KombiloFuseki("./kombilo_player.py"),
+            #Pachi('./runpachi.sh -t =5000 slave'),
+            #Pachi('./runpachi.sh -t =5000 slave'),
             ]
-    weights = [1.0, 0.3, 1.0]
+    weights = [1.0, 1.0, 1.0, 1.0]
     for num, b in enumerate(bots):
         logging.debug("%d %.2f %s" % (num, weights[num], b))
 
@@ -543,5 +562,6 @@ def main():
 
 
 if __name__ == "__main__":
+    os.chdir(os.path.dirname(sys.argv[0]))
     main()
     pass
