@@ -302,7 +302,7 @@ class GtpEnsemble(RWI):
             responses = self.interact(raw_line)
             good, bad = first_good_first_bad(responses)
             if bad:
-                logging.error("Err while quitting: %s" % repr(bad))
+                logging.error("%s: Err while quitting: %s" %(repr(self), repr(bad)))
             self.close()
             return True, '=\n\n'
         elif cmd == "genmove":
@@ -400,25 +400,38 @@ def gtp_io(group, iterator):
             return
 
 
-class VotingEnsemble(GtpEnsemble):
+class WeightedEnsemble(GtpEnsemble):
 
-    def __init__(self, bots, weights=None, ties='first'):
-        super(VotingEnsemble, self).__init__(bots)
+    def __init__(self, bots, weights=None):
+        super(WeightedEnsemble, self).__init__(bots)
         if weights is None:
             weights = np.ones(len(bots))
         self.weights = weights
+        assert len(weights) >= len(bots)
 
+    def weight_for_bot(self, index):
+        assert 0 <= index < len(self.weights)
+
+        if self.weights[index] == 'get_from_bot':
+            return self.bots[index].weight
+        return self.weights[index]
+
+
+class VotingEnsemble(WeightedEnsemble):
+
+    def __init__(self, bots, weights=None, ties='first'):
+        super(VotingEnsemble, self).__init__(bots, weights)
         assert ties in ['random', 'first']
         self.ties = ties
 
     def choose_move(self, responses):
-        logging.debug("VotingEnsemble candidates: %s" % repr(responses))
+        logging.debug("%s: candidates: %s" % (repr(self), repr(responses)))
 
         assert len(responses) == len(self.bots)
         votes = {}
         for bot_num, move in enumerate(responses):
-            votes[move] = votes.get(move, 0.0) + self.weights[bot_num]
-        logging.debug("VotingEnsemble votes: %s" % repr(votes))
+            votes[move] = votes.get(move, 0.0) + self.weight_for_bot(bot_num)
+        logging.debug("%s: votes: %s" %(repr(self), repr(votes)))
 
         m = max(votes.itervalues())
 
@@ -433,16 +446,11 @@ class VotingEnsemble(GtpEnsemble):
         assert False
 
 
-class MoveProbabilityEnsemble(GtpEnsemble):
+class MoveProbabilityEnsemble(WeightedEnsemble):
 
     def __init__(self, bots, weights=None, ties='random'):
-        super(MoveProbabilityEnsemble, self).__init__(bots)
-        if weights is None:
-            weights = np.ones(len(bots))
-        self.weights = weights
-
+        super(MoveProbabilityEnsemble, self).__init__(bots, weights)
         for b in self.bots:
-            # logging.debug(b.bot_cmd)
             assert isinstance(b, MoveProbBot)
 
         assert ties in ['random', 'first']
@@ -505,18 +513,20 @@ class MoveProbabilityEnsemble(GtpEnsemble):
                     "%s: bot %d: failed probabilities" %
                     (repr(self), bot_num))
                 continue
+            weight = self.weight_for_bot(bot_num)
             for move, prob in resp:
-                vote = prob * self.weights[bot_num]
+                vote = prob * weight
                 bv[-1][move] = vote
                 votes[move] = votes.get(move, 0.0) + vote
 
         vs = sorted(votes.iteritems(), key=(lambda k_v: k_v[1]), reverse=True)
-        logging.debug("Ensemble probs:")
+        msg = ["%s:"%repr(self), "move\tsum\t[votes]"]
         for move, vote in vs[:10]:
-            log = ["%s %.4f: " % (move, vote)]
+            line = ["%s\t%.4f:\t" % (move, vote)]
             for d in bv:
-                log.append("%.4f" % d.get(move, 0))
-            logging.debug(' '.join(log))
+                line.append("%.4f" % d.get(move, 0))
+            msg.append(' '.join(line))
+        logging.debug('\n'.join(msg))
 
         m = max(votes.itervalues())
         if self.ties == 'random':
@@ -531,7 +541,7 @@ class MoveProbabilityEnsemble(GtpEnsemble):
 
 
 def main():
-    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
+    logging.basicConfig(format='__ %(asctime)s %(levelname)s: %(message)s',
                         level=logging.DEBUG) #, filename='LOG')
 
     bots = [# MoveProbBotDefault("gogui-client haf.ms.mff.cuni.cz 10666"),
@@ -541,9 +551,9 @@ def main():
             #Pachi('./runpachi.sh -t =5000 slave'),
             #Pachi('./runpachi.sh -t =5000 slave'),
             ]
-    weights = [1.0, 1.0, 1.0, 1.0]
-    for num, b in enumerate(bots):
-        logging.debug("%d %.2f %s" % (num, weights[num], b))
+    weights = ['get_from_bot', 1.0, 1.0, 1.0]
+    #for num, b in enumerate(bots):
+        #logging.debug("bot #%d\nweight: %s\nbot: %s" % (num, weights[num], b))
 
     #g = VotingEnsemble(map(GtpBot, bots), weights=weights, ties='random')
 
